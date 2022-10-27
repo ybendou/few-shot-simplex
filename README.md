@@ -1,9 +1,9 @@
 # banana-penguin
-Repo for few-shot learning evaluation. 
+Official repository for: DISAMBIGUATION OF ONE-SHOT VISUAL CLASSIFICATION TASKS: A SIMPLEX-BASED APPROACH
 
 Run the command to add to path :
 ```
- export PYTHONPATH=<path>/banana-penguin:$PYTHONPATH
+ export PYTHONPATH=<path>/few-shot-simplex:$PYTHONPATH
 ```
 
 - Run our method:
