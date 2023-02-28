@@ -1,5 +1,4 @@
-# banana-penguin
-Official repository for: DISAMBIGUATION OF ONE-SHOT VISUAL CLASSIFICATION TASKS: A SIMPLEX-BASED APPROACH
+# Official repository for: DISAMBIGUATION OF ONE-SHOT VISUAL CLASSIFICATION TASKS: A SIMPLEX-BASED APPROACH
 
 Run the command to add to path :
 ```
