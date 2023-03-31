@@ -28,6 +28,7 @@ def process_arguments(params=None):
     parser.add_argument("--alpha-iter", type=int, default=-1, help="Number of iteration for alphas in Gradient descent per epoch")
     parser.add_argument("--thresh-elbow", type=float, default=1.5, help="Threshold for MSE jumps in simplex extraction in order to automatically selecet the best number of  summits ")
     parser.add_argument("--lamda-mix", type=float, default=1, help="coefficient to mix simplex summets with mean")
+    parser.add_argument("--maxK", type=int, default=63, help="Maximum number of summits to consider in simplex extraction")
 
     ### pytorch options
     parser.add_argument("--device", type=str, default="cuda:0", help="device(s) to use, for multiple GPUs try cuda:ijk, will not work with 10+ GPUs")

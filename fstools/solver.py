@@ -70,7 +70,7 @@ def get_loss_reg(D, loss_amp=1, device='cuda:0'):
     loss = L2(D - D[:, perm], torch.zeros(D.shape).to(device))/(2*K**2)
     return loss*loss_amp
 
-def gradient_descent_ClosedForm(X, K, lamda=0.1, trainCfg={'lr':0.1, 'mmt':0.8, 'n_iter':10, 'loss_amp':1, 'loss_alpha':1}, D_init=None, verbose=True, device='cuda:0'):
+def gradient_descent_ClosedForm(X, K, lamda=0.1, trainCfg={'lr':0.1, 'mmt':0.8, 'n_iter':10, 'loss_amp':1, 'loss_alpha':1, 'early_stopping':False}, D_init=None, verbose=True, device='cuda:0'):
     """
         Perform Gradient Descent to find simplex summets.
         The summets are computer using a close form.
@@ -113,14 +113,13 @@ def gradient_descent_ClosedForm(X, K, lamda=0.1, trainCfg={'lr':0.1, 'mmt':0.8, 
     ##### Stopped here
     best_epoch = {'loss':torch.tensor([10e5, 10e5]), 'n':0, 'loss_reg':10e5, 'D':D.data.cpu().clone(), 'alpha':alpha.data.cpu().clone()}
     count_val = 1
+    previous_loss = 10e5
     for n in range(trainCfg['n_iter']):
         
         # For the first iteration, first look for alphas
         if n == 0: 
             # Fix D and re-update alpha:
-            D.requires_grad = False
             alpha.requires_grad = True
-
             for _ in range(trainCfg['alpha_iter']):
                 optimizerAlpha.zero_grad()
                 lossMSEAlpha = get_loss_mse(alpha, D, X, loss_amp=loss_amp)
@@ -154,12 +153,18 @@ def gradient_descent_ClosedForm(X, K, lamda=0.1, trainCfg={'lr':0.1, 'mmt':0.8, 
                 best_epoch['n'] = n
                 best_epoch['D'] = D.data.cpu().clone()
                 best_epoch['alpha'] = alpha.data.cpu().clone()
+
+            if trainCfg['early_stopping'] and abs((1-lamda)*loss1_eval+lamda*loss2_eval-previous_loss)<=trainCfg['early_stopping_eps']:
+                if verbose:
+                    print(f'Early stopping at epoch {n}')
+                break
+            previous_loss = (1-lamda)*loss1_eval+lamda*loss2_eval 
     if verbose:
         print(f'Best epoch {best_epoch["n"]} | Total Loss : {best_epoch["loss"].mean().item() + lamda*best_epoch["loss_reg"]} | Loss MSE: {best_epoch["loss"].mean().item()} | Loss reg: {best_epoch["loss_reg"]}')
     return best_epoch['D'], best_epoch["loss"]   # load images as tensors
     
 
-def find_summetsBatch(data, args, method='simplex',thresh_elbow=1.5, return_jumpsMSE=False, lamda_reg=0.05, n_iter=100, alpha_iter=5, trainCfg={'lr':0.1, 'mmt':0.8, 'D_iter':1, 'loss_amp':100, 'loss_alpha':1}, verbose=False, maxK=3, concat=True):
+def find_summetsBatch(data, args, method='simplex',thresh_elbow=1.5, return_jumpsMSE=False, lamda_reg=0.05, n_iter=100, alpha_iter=5, normalize=False, trainCfg={'lr':0.1, 'mmt':0.8, 'D_iter':1, 'loss_amp':100, 'loss_alpha':1}, verbose=False, maxK=3, concat=True, K=None):
     """
     Find summets of all images in a batch of data, returns the best number of summets per image based on the elbow method.
     Arguments:
@@ -178,39 +183,54 @@ def find_summetsBatch(data, args, method='simplex',thresh_elbow=1.5, return_jump
     D_solutions = []
     # Run optim on multiple values of K summets for all data in the run:
     dim = data.shape[-1]
+    if normalize: 
+        mean = torch.mean(data.reshape(-1, dim), dim=0, keepdim=True).unsqueeze(0)
+        std = torch.std(data.reshape(-1, dim), dim=0, keepdim=True).unsqueeze(0)
+        data = (data-mean)/std
     K_list = {}
     MSE_list = []
-    for K in range(1,maxK+1):
+    if maxK > 0:
+        for K in range(1,maxK+1):
+            if method=='simplex':
+                D_sol, lossMSE = gradient_descent_ClosedForm(data, K, lamda=lamda_reg, trainCfg=trainCfg, D_init='oui', verbose=verbose, device=args.device)
+            elif method=='kmeans':
+                D_sol, lossMSE = kmeans(data, K)
+            if normalize:
+                D_sol = D_sol*std + mean
+            K_list[K] = D_sol
+            MSE_list.append(lossMSE)
+
+        # Get the best value of K:
+        jumps = torch.stack([MSE_list[k]/MSE_list[k+1] for k in range(len(MSE_list)-1)], axis=1)
+        max_jump, bestK = jumps.max(axis=1)
+        bestK[max_jump<thresh_elbow] = 1 # if unsignificant jump then 
+        bestK[max_jump>=thresh_elbow] += 2 
+        D_solutions = [K_list[K.item()][b] for b,K in enumerate(bestK)]
+        if concat:
+            # Pad D tensor:
+            minK, maxK = min(bestK), max(bestK)
+            if minK!=maxK:
+                for k in range(len(D_solutions)):
+                    if bestK[k]<maxK:
+                        D_solutions[k] = torch.cat([D_solutions[k].reshape(-1, dim), torch.zeros(maxK-bestK[k], dim)])
+                
+            D = torch.stack(D_solutions).reshape(data.shape[0], -1, maxK, dim)
+            bestK = bestK.reshape(data.shape[0], -1)
+            if return_jumpsMSE:
+                return D, bestK, jumps, MSE_list
+            else:
+                return D, bestK
+        else:
+            return D_solutions
+    else:
         if method=='simplex':
             D_sol, lossMSE = gradient_descent_ClosedForm(data, K, lamda=lamda_reg, trainCfg=trainCfg, D_init='oui', verbose=verbose, device=args.device)
         elif method=='kmeans':
             D_sol, lossMSE = kmeans(data, K)
+        if normalize:
+            D_sol = D_sol*std + mean
+        return [D_sol]
 
-        K_list[K] = D_sol
-        MSE_list.append(lossMSE)
-
-    # Get the best value of K:
-    jumps = torch.stack([MSE_list[k]/MSE_list[k+1] for k in range(len(MSE_list)-1)], axis=1)
-    max_jump, bestK = jumps.max(axis=1)
-    bestK[max_jump<thresh_elbow] = 1 # if unsignificant jump then 
-    bestK[max_jump>=thresh_elbow] += 2 
-    D_solutions = [K_list[K.item()][b] for b,K in enumerate(bestK)]
-    if concat:
-        # Pad D tensor:
-        minK, maxK = min(bestK), max(bestK)
-        if minK!=maxK:
-            for k in range(len(D_solutions)):
-                if bestK[k]<maxK:
-                    D_solutions[k] = torch.cat([D_solutions[k].reshape(-1, dim), torch.zeros(maxK-bestK[k], dim)])
-            
-        D = torch.stack(D_solutions).reshape(data.shape[0], -1, maxK, dim)
-        bestK = bestK.reshape(data.shape[0], -1)
-        if return_jumpsMSE:
-            return D, bestK, jumps, MSE_list
-        else:
-            return D, bestK
-    else:
-        return D_solutions
 
 def get_closest_predictions(D, K_solutions_t, n_shots, args):
     """
